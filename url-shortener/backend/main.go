@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"go.etcd.io/bbolt"
 	"log"
@@ -35,15 +36,15 @@ func main() {
 }
 
 type Config struct {
-	BaseURL    string `json:"base_url"`
-	DBPath     string `json:"db_path"`
+	BaseURL     string `json:"base_url"`
+	DBPath      string `json:"db_path"`
 	ShortLength int    `json:"short_length"`
 }
 
 func initConfig() {
 	config := Config{
-		BaseURL:    "http://localhost:8080",
-		DBPath:     "urls.db",
+		BaseURL:     "http://localhost:8080",
+		DBPath:      "urls.db",
 		ShortLength: 6,
 	}
 	if configFile, err := os.ReadFile("config.json"); err == nil {
@@ -75,6 +76,15 @@ func initDB() error {
 
 func setupRouter() *gin.Engine {
 	r := gin.Default()
+
+	r.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000", "http://127.0.0.1:5173"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Length", "Content-Type", "Authorization"},
+		ExposeHeaders:    []string{"Content-Length"},
+		AllowCredentials: true,
+		MaxAge:           12 * time.Hour,
+	}))
 
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
@@ -117,9 +127,9 @@ type URLInfo struct {
 }
 
 type StatsResponse struct {
-	TotalURLs    int `json:"total_urls"`
-	TotalClicks  int `json:"total_clicks"`
-	TopURLs      []URLInfo `json:"top_urls"`
+	TotalURLs   int       `json:"total_urls"`
+	TotalClicks int       `json:"total_clicks"`
+	TopURLs     []URLInfo `json:"top_urls"`
 }
 
 func shortenURL(c *gin.Context) {
@@ -299,7 +309,6 @@ func getStats(c *gin.Context) {
 			}
 			stats.TotalClicks += accessCount
 
-			// Keep top 5 URLs
 			if len(stats.TopURLs) < 5 || accessCount > stats.TopURLs[4].AccessCount {
 				url := URLInfo{
 					ShortURL:    fmt.Sprintf("%s/%s", baseURL, k),
@@ -308,7 +317,6 @@ func getStats(c *gin.Context) {
 					AccessCount: accessCount,
 				}
 
-				// Insert sorted
 				inserted := false
 				for i := range stats.TopURLs {
 					if accessCount > stats.TopURLs[i].AccessCount {

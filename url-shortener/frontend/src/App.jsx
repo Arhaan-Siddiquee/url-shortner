@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Link, Copy, BarChart3, ExternalLink, Scissors, TrendingUp, Clock, MousePointer } from 'lucide-react';
 
-const API_BASE = 'http://localhost:8080';
+const API_BASE = import.meta.env.PROD 
+  ? window.location.origin 
+  : 'http://localhost:8080';
 
 function App() {
   const [longUrl, setLongUrl] = useState('');

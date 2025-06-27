@@ -10,12 +10,13 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 )
 
 var (
 	db          *bbolt.DB
-	baseURL     = "http://localhost:8080"
+	baseURL     string
 	statsBucket = []byte("stats")
 )
 
@@ -29,8 +30,15 @@ func main() {
 
 	r := setupRouter()
 
-	log.Printf("Server starting on %s", baseURL)
-	if err := r.Run(":8080"); err != nil {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	log.Printf("Server starting on port %s", port)
+	log.Printf("Base URL: %s", baseURL)
+	
+	if err := r.Run(":" + port); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
 }
@@ -42,23 +50,44 @@ type Config struct {
 }
 
 func initConfig() {
+	baseURL = os.Getenv("BASE_URL")
+	if baseURL == "" {
+		baseURL = "http://localhost:8080"
+	}
+
 	config := Config{
-		BaseURL:     "http://localhost:8080",
+		BaseURL:     baseURL,
 		DBPath:      "urls.db",
 		ShortLength: 6,
 	}
+	
 	if configFile, err := os.ReadFile("config.json"); err == nil {
 		if err := json.Unmarshal(configFile, &config); err != nil {
 			log.Printf("Error reading config file: %v. Using defaults", err)
 		}
 	}
 
-	baseURL = config.BaseURL
+	if envBaseURL := os.Getenv("BASE_URL"); envBaseURL != "" {
+		baseURL = envBaseURL
+	} else {
+		baseURL = config.BaseURL
+	}
 }
 
 func initDB() error {
 	var err error
-	db, err = bbolt.Open("urls.db", 0600, &bbolt.Options{Timeout: 1 * time.Second})
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = "urls.db"
+	}
+	
+	if dir := filepath.Dir(dbPath); dir != "." {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("failed to create db directory: %v", err)
+		}
+	}
+	
+	db, err = bbolt.Open(dbPath, 0600, &bbolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
 		return err
 	}
@@ -75,19 +104,27 @@ func initDB() error {
 }
 
 func setupRouter() *gin.Engine {
+	if os.Getenv("GIN_MODE") == "" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+	
 	r := gin.Default()
 
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000", "http://127.0.0.1:5173"},
+		AllowAllOrigins:  true,
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Length", "Content-Type", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},
-		AllowCredentials: true,
+		AllowCredentials: false,
 		MaxAge:           12 * time.Hour,
 	}))
 
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
+
+	r.Static("/static", "./frontend/build/static")
+	r.StaticFile("/favicon.ico", "./frontend/build/favicon.ico")
+	r.StaticFile("/manifest.json", "./frontend/build/manifest.json")
 
 	api := r.Group("/api")
 	{
@@ -95,15 +132,28 @@ func setupRouter() *gin.Engine {
 		api.GET("/info/:short", getURLInfo)
 	}
 
-	r.GET("/:short", redirectURL)
-
 	admin := r.Group("/admin")
 	{
 		admin.GET("/stats", getStats)
 	}
 
 	r.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "base_url": baseURL})
+	})
+
+	r.GET("/:short", func(c *gin.Context) {
+		short := c.Param("short")
+		
+		if short == "static" || short == "api" || short == "admin" || short == "health" {
+			c.Next()
+			return
+		}
+		
+		redirectURL(c)
+	})
+
+	r.NoRoute(func(c *gin.Context) {
+		c.File("./frontend/build/index.html")
 	})
 
 	return r
@@ -210,7 +260,7 @@ func redirectURL(c *gin.Context) {
 		return nil
 	})
 	if err != nil || len(urlData) == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "URL not found"})
+		c.File("./frontend/build/index.html")
 		return
 	}
 
